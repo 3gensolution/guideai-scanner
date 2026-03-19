@@ -1,0 +1,44 @@
+{
+  "name": "@guideai/scanner",
+  "version": "0.1.0",
+  "bin": {
+    "guideai-scan": "./dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./vite": {
+      "import": "./dist/plugins/vite.mjs",
+      "require": "./dist/plugins/vite.js"
+    },
+    "./webpack": {
+      "import": "./dist/plugins/webpack.mjs",
+      "require": "./dist/plugins/webpack.js"
+    }
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@babel/parser": "^7.26.0",
+    "@babel/traverse": "^7.26.0",
+    "commander": "^12.0.0",
+    "fast-glob": "^3.3.0"
+  },
+  "devDependencies": {
+    "@guideai/shared": "workspace:*",
+    "@types/babel__traverse": "^7.20.0",
+    "@types/node": "^25.5.0",
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
