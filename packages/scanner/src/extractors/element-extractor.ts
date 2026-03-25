@@ -13,11 +13,14 @@ const traverse = (typeof _traverse === 'function' ? _traverse : (_traverse as { 
 
 /** Tags we want to extract as interactive elements. */
 const INTERACTIVE_TAGS = new Set([
-  'button',
-  'a',
-  'input',
-  'select',
-  'textarea',
+  'button', 'a', 'input', 'select', 'textarea',
+  'details', 'summary', 'dialog',
+]);
+
+const INTERACTIVE_ROLES = new Set([
+  'button', 'link', 'tab', 'menuitem', 'menuitemcheckbox', 'menuitemradio',
+  'checkbox', 'radio', 'switch', 'combobox', 'slider', 'spinbutton',
+  'searchbox', 'textbox', 'dialog', 'alertdialog', 'tabpanel',
 ]);
 
 /**
@@ -47,6 +50,14 @@ export async function extractElements(
 
   if (['.tsx', '.jsx', '.ts', '.js'].includes(ext)) {
     return extractJsxElements(source, filePath, routePath);
+  }
+
+  if (ext === '.svelte') {
+    // Strip script and style blocks, then extract from template (HTML-like)
+    const templateSource = source
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+    return extractHtmlElements(templateSource, filePath, routePath);
   }
 
   return [];
@@ -119,12 +130,21 @@ function extractJsxElements(
         return;
       }
 
-      // Only extract interactive elements
-      if (!INTERACTIVE_TAGS.has(tagName)) {
-        return;
-      }
-
       const attributes = extractJsxAttributes(nodePath.node.attributes);
+
+      // Check if element is interactive by tag, role, or event handler
+      const role = attributes['role'];
+      const hasEventHandler = nodePath.node.attributes.some(
+        (attr: any) =>
+          attr.type === 'JSXAttribute' &&
+          attr.name?.type === 'JSXIdentifier' &&
+          /^on[A-Z]/.test(attr.name.name),
+      );
+      const isInteractive =
+        INTERACTIVE_TAGS.has(tagName) ||
+        (role != null && INTERACTIVE_ROLES.has(role)) ||
+        hasEventHandler;
+      if (!isInteractive) return;
 
       // Get text content from children
       let textContent: string | undefined;
@@ -147,6 +167,9 @@ function extractJsxElements(
         component_name: componentName,
         source_file: filePath,
         form_label: currentFormLabel || findNearestLabel(attributes, source),
+        type: tagName === 'input' ? (attributes['type'] || 'text') : undefined,
+        href: tagName === 'a' ? (attributes['href'] || undefined) : undefined,
+        role: attributes['role'] || undefined,
       };
 
       const fingerprint = buildFingerprint(partialElement);
@@ -201,7 +224,7 @@ function extractHtmlElements(
 
   // Match opening tags for interactive elements
   const tagPattern =
-    /<(button|a|input|select|textarea)\b([^>]*)(?:>([\s\S]*?)<\/\1>|\s*\/?>)/gi;
+    /<(button|a|input|select|textarea|details|summary|dialog)\b([^>]*)(?:>([\s\S]*?)<\/\1>|\s*\/?>)/gi;
   let match: RegExpExecArray | null;
 
   // Track nearest heading
@@ -237,6 +260,9 @@ function extractHtmlElements(
     // Find preceding <label>
     const formLabel = findPrecedingLabel(source, match.index);
 
+    const inputType = tagName === 'input' ? (attributes['type'] || 'text') : undefined;
+    const href = tagName === 'a' ? (attributes['href'] || undefined) : undefined;
+
     const partialElement: Partial<ScannedElement> = {
       id: randomUUID(),
       route_path: routePath,
@@ -250,6 +276,9 @@ function extractHtmlElements(
         attributes['data-testid'] || attributes['data-test-id'] || undefined,
       source_file: filePath,
       form_label: formLabel,
+      type: inputType,
+      href: href,
+      role: attributes['role'] || undefined,
     };
 
     const fingerprint = buildFingerprint(partialElement);
@@ -307,12 +336,28 @@ function extractJsxChildrenText(element: JsxElementNode): string | undefined {
     if (child.type === 'JSXText') {
       const trimmed = (child.value || '').trim();
       if (trimmed) textParts.push(trimmed);
-    } else if (
-      child.type === 'JSXExpressionContainer' &&
-      child.expression?.type === 'StringLiteral'
-    ) {
-      const val = child.expression.value || '';
-      if (val.trim()) textParts.push(val.trim());
+    } else if (child.type === 'JSXExpressionContainer') {
+      const expr = child.expression;
+      if (!expr) continue;
+      if (expr.type === 'StringLiteral') {
+        const val = (expr as { value: string }).value || '';
+        if (val.trim()) textParts.push(val.trim());
+      } else if (expr.type === 'TemplateLiteral') {
+        const quasis = (expr as { quasis: Array<{ value: { raw: string } }> }).quasis || [];
+        const text = quasis.map((q) => q.value.raw).join('...');
+        if (text.trim()) textParts.push(text.trim());
+      } else if (expr.type === 'ConditionalExpression') {
+        const consequent = (expr as any).consequent;
+        const alternate = (expr as any).alternate;
+        if (consequent?.type === 'StringLiteral' && consequent.value) {
+          textParts.push(consequent.value);
+        }
+        if (alternate?.type === 'StringLiteral' && alternate.value) {
+          if (!textParts.includes(alternate.value)) {
+            textParts.push(alternate.value);
+          }
+        }
+      }
     }
     // Recursively handle nested JSX elements
     if (child.type === 'JSXElement' && child.children) {

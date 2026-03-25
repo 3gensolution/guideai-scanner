@@ -9,6 +9,8 @@ import {
   extractAngularRoutes,
   extractVueRoutes,
   extractHtmlRoutes,
+  extractRemixRoutes,
+  extractSvelteKitRoutes,
 } from './detectors';
 import { extractElements } from './extractors';
 import { uploadKnowledgeBase } from './uploader';
@@ -91,6 +93,12 @@ async function extractRoutes(
     case 'nuxt':
       return extractVueRoutes(rootDir);
 
+    case 'remix':
+      return extractRemixRoutes(rootDir);
+
+    case 'sveltekit':
+      return extractSvelteKitRoutes(rootDir);
+
     case 'plain-html':
       return extractHtmlRoutes(rootDir);
 
@@ -147,7 +155,7 @@ async function extractAllElements(
     }
   }
 
-  return allElements;
+  return deduplicateElements(allElements);
 }
 
 /**
@@ -155,7 +163,7 @@ async function extractAllElements(
  * beyond the route source files.
  */
 function shouldScanComponents(framework: FrameworkType): boolean {
-  return ['react-router', 'angular', 'vue-router'].includes(framework);
+  return ['react-router', 'angular', 'vue-router', 'remix', 'sveltekit'].includes(framework);
 }
 
 /**
@@ -163,10 +171,12 @@ function shouldScanComponents(framework: FrameworkType): boolean {
  */
 async function findComponentFiles(rootDir: string): Promise<string[]> {
   const patterns = [
-    'src/components/**/*.{tsx,jsx,ts,js,vue}',
-    'src/views/**/*.{tsx,jsx,ts,js,vue}',
-    'src/pages/**/*.{tsx,jsx,ts,js,vue}',
+    'src/components/**/*.{tsx,jsx,ts,js,vue,svelte}',
+    'src/views/**/*.{tsx,jsx,ts,js,vue,svelte}',
+    'src/pages/**/*.{tsx,jsx,ts,js,vue,svelte}',
+    'src/routes/**/*.{tsx,jsx,ts,js,svelte}',
     'app/components/**/*.{tsx,jsx,ts,js}',
+    'app/routes/**/*.{tsx,jsx,ts,js}',
   ].map((p) => path.join(rootDir, p).replace(/\\/g, '/'));
 
   return fg(patterns, {
@@ -192,21 +202,69 @@ function inferRouteForComponent(
   rootDir: string,
 ): string {
   const relativePath = path.relative(rootDir, filePath).toLowerCase();
+  const fileName = path
+    .basename(filePath, path.extname(filePath))
+    .toLowerCase();
 
-  // Try to match by directory name similarity
+  // Strategy 1: Match by component name
+  for (const route of routes) {
+    if (
+      route.component_name &&
+      fileName.includes(route.component_name.toLowerCase())
+    ) {
+      return route.path;
+    }
+  }
+
+  // Strategy 2: Weighted multi-segment matching
+  let bestRoute = '/';
+  let bestScore = 0;
   for (const route of routes) {
     const routeSegments = route.path
       .split('/')
       .filter(Boolean)
       .filter((s) => !s.startsWith(':'));
 
+    let score = 0;
     for (const segment of routeSegments) {
       if (relativePath.includes(segment.toLowerCase())) {
-        return route.path;
+        score++;
       }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      bestRoute = route.path;
     }
   }
 
-  // Default to root route
-  return '/';
+  return bestRoute;
+}
+
+/**
+ * Deduplicate elements by stable signals, keeping the highest-scored version.
+ */
+function deduplicateElements(elements: ScannedElement[]): ScannedElement[] {
+  const seen = new Map<string, ScannedElement>();
+
+  for (const el of elements) {
+    const key = [
+      el.data_guideai || '',
+      el.data_testid || '',
+      el.tag,
+      el.text || '',
+      el.aria_label || '',
+      el.name || '',
+      el.route_path,
+    ].join('|');
+
+    const existing = seen.get(key);
+    if (
+      !existing ||
+      el.fingerprint.total_score > existing.fingerprint.total_score
+    ) {
+      seen.set(key, el);
+    }
+  }
+
+  return Array.from(seen.values());
 }

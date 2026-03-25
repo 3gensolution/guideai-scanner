@@ -5,3 +5,5 @@ export { extractReactRouterRoutes } from './react-router';
 export { extractAngularRoutes } from './angular';
 export { extractVueRoutes } from './vue-router';
 export { extractHtmlRoutes } from './html';
+export { extractRemixRoutes } from './remix';
+export { extractSvelteKitRoutes } from './sveltekit';

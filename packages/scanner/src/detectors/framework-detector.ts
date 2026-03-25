@@ -50,6 +50,16 @@ export async function detectFramework(rootDir: string): Promise<FrameworkType> {
     return 'nextjs-app-router';
   }
 
+  // Remix detection
+  if (allDeps['@remix-run/react'] || allDeps['@remix-run/node'] || allDeps['remix']) {
+    return 'remix';
+  }
+
+  // SvelteKit detection
+  if (allDeps['@sveltejs/kit']) {
+    return 'sveltekit';
+  }
+
   // Nuxt detection (must come before generic Vue check)
   if (allDeps['nuxt'] || allDeps['nuxt3']) {
     return 'nuxt';
