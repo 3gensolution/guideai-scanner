@@ -11,12 +11,6 @@ export default defineConfig([
     splitting: false,
     clean: true,
     shims: true,
-    banner: ({ format }) => {
-      if (format === 'cjs') {
-        return { js: '#!/usr/bin/env node' };
-      }
-      return {};
-    },
   },
   {
     entry: {
