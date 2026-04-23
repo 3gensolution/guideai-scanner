@@ -1,4 +1,9 @@
-import type { KnowledgeBase, Route, ScannedElement, FrameworkType } from '@guideai/shared';
+import type {
+  Route,
+  ScannedElement,
+  FrameworkType,
+  UIMap,
+} from '@guideai/shared';
 
 export interface ScanOptions {
   key: string;
@@ -12,6 +17,7 @@ export interface ScanResult {
   framework: FrameworkType;
   routes: Route[];
   elements: ScannedElement[];
+  ui_map?: UIMap;
   duration_ms: number;
 }
 
@@ -21,4 +27,12 @@ export interface ScanContext {
   sourceFiles: string[];
 }
 
-export type { KnowledgeBase, Route, ScannedElement, FrameworkType };
+export type {
+  KnowledgeBase,
+  Route,
+  ScannedElement,
+  FrameworkType,
+  UIMap,
+  UIMapNode,
+  UIMapNodeKind,
+} from '@guideai/shared';

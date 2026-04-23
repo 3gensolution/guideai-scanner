@@ -46,6 +46,7 @@ export async function uploadKnowledgeBase(
     framework: data.framework,
     routes: data.routes,
     elements: data.elements,
+    ui_map: data.ui_map,
     scanned_at: new Date().toISOString(),
     duration_ms: data.duration_ms,
   };

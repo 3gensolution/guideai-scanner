@@ -14,6 +14,7 @@ import {
 } from './detectors';
 import { extractElements } from './extractors';
 import { uploadKnowledgeBase } from './uploader';
+import { buildUIMap } from './ui-map';
 
 /**
  * Run the full GuideAI scanning pipeline:
@@ -45,14 +46,19 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
   const elements = await extractAllElements(routes, rootDir, framework);
   console.log(`[GuideAI] Found ${elements.length} interactive elements`);
 
+  // Step 4: Build a route/component/section tree for LLM context
+  const uiMap = buildUIMap(framework, routes, elements);
+  console.log(`[GuideAI] Built UI map (${uiMap.route_count} routes, ${uiMap.element_count} elements)`);
+
   const result: ScanResult = {
     framework,
     routes,
     elements,
+    ui_map: uiMap,
     duration_ms: Date.now() - start,
   };
 
-  // Step 4: Upload to backend (unless dry run)
+  // Step 5: Upload to backend (unless dry run)
   if (!options.dryRun) {
     console.log('[GuideAI] Uploading knowledge base...');
     try {
