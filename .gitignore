@@ -1,0 +1,36 @@
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+build/
+coverage/
+.next/
+playwright-report/
+test-results/
+
+# Docker volumes
+pgdata/
+redisdata/
+backend/*
