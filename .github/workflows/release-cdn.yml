@@ -1,0 +1,32 @@
+name: Release CDN Assets
+
+on:
+  push:
+    tags:
+      - "cdn-v*"
+
+jobs:
+  release-cdn:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      # Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Output jsDelivr URLs
+      - name: Output CDN URLs
+        run: |
+          echo ""
+          echo "guideai.js:"
+          echo "https://cdn.jsdelivr.net/gh/${{ github.repository }}@${{ github.ref_name }}/cdn/guideai.js"
+
+          echo ""
+          echo "worker.js:"
+          echo "https://cdn.jsdelivr.net/gh/${{ github.repository }}@${{ github.ref_name }}/cdn/worker.js"
+
+          echo ""
+          echo "CDN release completed."

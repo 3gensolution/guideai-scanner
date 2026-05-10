@@ -1,0 +1,42 @@
+name: Publish Scanner Package
+
+on:
+  push:
+    tags:
+      - "scanner-v*"
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      # Checkout repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Setup Node
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org/
+
+      # Install dependencies
+      - name: Install dependencies
+        working-directory: packages/scanner
+        run: npm install
+
+      # Build package
+      - name: Build package
+        working-directory: packages/scanner
+        run: npm run build
+
+      # Publish to npm
+      - name: Publish package
+        working-directory: packages/scanner
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
