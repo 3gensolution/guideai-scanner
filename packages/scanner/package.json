@@ -34,7 +34,6 @@
     "fast-glob": "^3.3.0"
   },
   "devDependencies": {
-    "@guideai/shared": "workspace:*",
     "@types/babel__traverse": "^7.20.0",
     "@types/node": "^25.5.0",
     "tsup": "^8.3.0",

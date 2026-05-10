@@ -1,5 +1,5 @@
 import type { FingerprintSignals, ScannedElement } from '../types';
-import { computeFingerprintScore, type ScoringInput } from '@guideai/shared';
+import { computeFingerprintScore, type ScoringInput } from '../fingerprint-scoring';
 
 /**
  * Build a FingerprintSignals object from scanned element data.

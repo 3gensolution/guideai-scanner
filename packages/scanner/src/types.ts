@@ -3,7 +3,7 @@ import type {
   ScannedElement,
   FrameworkType,
   UIMap,
-} from '@guideai/shared';
+} from './shared-types';
 
 export interface ScanOptions {
   key: string;
@@ -35,4 +35,5 @@ export type {
   UIMap,
   UIMapNode,
   UIMapNodeKind,
-} from '@guideai/shared';
+  FingerprintSignals,
+} from './shared-types';
