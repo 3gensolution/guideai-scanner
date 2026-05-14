@@ -47,6 +47,7 @@ export interface ScannedElement {
   route_host?: string;
   route_url?: string;
   tag: string;
+  dom_id?: string;
   text?: string;
   aria_label?: string;
   placeholder?: string;

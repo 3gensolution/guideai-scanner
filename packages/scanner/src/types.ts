@@ -6,7 +6,7 @@ import type {
 } from './shared-types';
 
 export interface ScanOptions {
-  key: string;
+  key?: string;
   dir?: string;
   apiUrl?: string;
   output?: string;

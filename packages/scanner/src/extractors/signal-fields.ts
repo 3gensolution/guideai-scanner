@@ -16,7 +16,7 @@ export function buildFingerprint(
     data_testid: element.data_testid || undefined,
     aria_label: element.aria_label || undefined,
     name: element.name || undefined,
-    id: element.fingerprint?.tier1_stable?.id || undefined,
+    id: element.dom_id || element.fingerprint?.tier1_stable?.id || undefined,
     text_content: element.text || undefined,
     placeholder: element.placeholder || undefined,
     label: element.form_label || undefined,

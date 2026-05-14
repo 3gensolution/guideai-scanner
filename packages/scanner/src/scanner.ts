@@ -60,6 +60,10 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
 
   // Step 5: Upload to backend (unless dry run)
   if (!options.dryRun) {
+    if (!options.key) {
+      throw new Error('A site API key is required for uploads. Pass --key sk_live_... or use dry-run mode.');
+    }
+
     console.log('[GuideAI] Uploading knowledge base...');
     try {
       await uploadKnowledgeBase(apiUrl, options.key, result);

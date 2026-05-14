@@ -9,15 +9,17 @@
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     },
     "./vite": {
+      "types": "./dist/plugins/vite.d.ts",
       "import": "./dist/plugins/vite.mjs",
       "require": "./dist/plugins/vite.js"
     },
     "./webpack": {
+      "types": "./dist/plugins/webpack.d.ts",
       "import": "./dist/plugins/webpack.mjs",
       "require": "./dist/plugins/webpack.js"
     }
