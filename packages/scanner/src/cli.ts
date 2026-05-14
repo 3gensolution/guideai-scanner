@@ -9,7 +9,7 @@ program
   .description('Scan your project and upload knowledge base to GuideAI')
   .requiredOption('--key <key>', 'Site API key (sk_live_...)')
   .option('--dir <dir>', 'Project root directory', process.cwd())
-  .option('--api-url <url>', 'GuideAI API URL', 'https://api.guideai.io')
+  .option('--api-url <url>', 'GuideAI API URL', 'https://api.3guideai.com')
   .option('--dry-run', 'Output JSON without uploading', false)
   .action(async (opts) => {
     if (!opts.key.startsWith('sk_live_')) {

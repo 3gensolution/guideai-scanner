@@ -29,7 +29,7 @@ import { buildUIMap } from './ui-map';
 export async function scan(options: ScanOptions): Promise<ScanResult> {
   const start = Date.now();
   const rootDir = path.resolve(options.dir || process.cwd());
-  const apiUrl = options.apiUrl || 'https://api.guideai.io';
+  const apiUrl = options.apiUrl || 'https://api.3guideai.com';
 
   // Step 1: Detect framework
   console.log('[GuideAI] Detecting framework...');
