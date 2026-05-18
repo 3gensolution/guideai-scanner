@@ -36,19 +36,19 @@ This prints scan progress and, when `--dry-run` is enabled, the full JSON result
 Use the scanner directly from code if you want to integrate it into a script or build process.
 
 ```ts
-import { scan } from '@guideai/scanner';
+import { scan } from "@guideai/scanner";
 
 async function runScan() {
   const result = await scan({
-    key: 'sk_live_example',
+    key: "sk_live_example",
     dir: process.cwd(),
-    apiUrl: 'https://api.guideai.io',
+    apiUrl: "https://api.guideai.io",
     dryRun: true,
   });
 
-  console.log('Framework:', result.framework);
-  console.log('Routes:', result.routes.length);
-  console.log('Elements:', result.elements.length);
+  console.log("Framework:", result.framework);
+  console.log("Routes:", result.routes.length);
+  console.log("Elements:", result.elements.length);
 }
 
 runScan().catch(console.error);
@@ -69,15 +69,15 @@ The `scan()` function returns a `ScanResult` object with:
 The package also exports a Vite plugin at `@guideai/scanner/vite`.
 
 ```ts
-import { defineConfig } from 'vite';
-import { guideai } from '@guideai/scanner/vite';
+import { defineConfig } from "vite";
+import { guideai } from "@guideai/scanner/vite";
 
 export default defineConfig({
   plugins: [
     guideai({
-      siteId: 'your-site-id',
+      siteId: "your-site-id",
       apiKey: process.env.GUIDEAI_API_KEY,
-      only: ['production'],
+      only: ["production"],
     }),
   ],
 });
@@ -90,14 +90,14 @@ If `apiKey` is not provided, the plugin reads from `process.env.GUIDEAI_API_KEY`
 Use the Webpack plugin from `@guideai/scanner/webpack`.
 
 ```js
-const { GuideAIWebpackPlugin } = require('@guideai/scanner/webpack');
+const { GuideAIWebpackPlugin } = require("@guideai/scanner/webpack");
 
 module.exports = {
   plugins: [
     new GuideAIWebpackPlugin({
-      siteId: 'your-site-id',
+      siteId: "your-site-id",
       apiKey: process.env.GUIDEAI_API_KEY,
-      only: ['production'],
+      only: ["production"],
     }),
   ],
 };
