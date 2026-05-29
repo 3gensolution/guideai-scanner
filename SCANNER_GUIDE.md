@@ -59,13 +59,13 @@ The scanner performs these steps automatically:
 
 ## Command-Line Options
 
-| Option | Description | Default | Required |
-|--------|-------------|---------|----------|
-| `--dry-run` | Output JSON without uploading | `false` | No |
-| `--dir` | Project root directory | Current working directory | No |
-| `--output` | Save scan result to JSON file | — | No |
-| `--api-url` | GuideAI API endpoint | `https://api.3guideai.com` | No |
-| `--key` | Site API key for uploads | — | Yes (unless using `--dry-run`) |
+| Option      | Description                   | Default                    | Required                       |
+| ----------- | ----------------------------- | -------------------------- | ------------------------------ |
+| `--dry-run` | Output JSON without uploading | `false`                    | No                             |
+| `--dir`     | Project root directory        | Current working directory  | No                             |
+| `--output`  | Save scan result to JSON file | —                          | No                             |
+| `--api-url` | GuideAI API endpoint          | `https://api.3guideai.com` | No                             |
+| `--key`     | Site API key for uploads      | —                          | Yes (unless using `--dry-run`) |
 
 ## Common Usage Patterns
 
@@ -78,6 +78,7 @@ npx guideai-scan --dry-run
 ```
 
 Output includes:
+
 - Detected framework
 - Number of routes found
 - Number of interactive elements found
@@ -100,6 +101,7 @@ npx guideai-scan --key sk_live_your_api_key
 ```
 
 The scanner will:
+
 - Run the full scan
 - Upload the knowledge base to GuideAI
 - Confirm successful upload
@@ -163,6 +165,7 @@ When using `--dry-run --output file.json`, the generated JSON contains:
 ### Key Fields Explained
 
 **Routes:**
+
 - `path` - Route path (e.g., `/dashboard`, `/users/:id`)
 - `component_name` - Component that renders this route
 - `source_file` - Source code file location
@@ -171,6 +174,7 @@ When using `--dry-run --output file.json`, the generated JSON contains:
 - `headings` - Page headings extracted from source
 
 **Elements:**
+
 - `tag` - HTML tag type (button, input, link, etc.)
 - `text` - Display text (for buttons, links)
 - `dom_id` - HTML id attribute
@@ -179,6 +183,7 @@ When using `--dry-run --output file.json`, the generated JSON contains:
 - `fingerprint` - Properties that identify the element for LLM context
 
 **UI Map:**
+
 - Hierarchical tree structure of your application
 - Shows relationships between routes, components, sections, and elements
 - Used by AI for accurate context and guidance
@@ -187,33 +192,36 @@ When using `--dry-run --output file.json`, the generated JSON contains:
 
 The scanner captures:
 
-| Category | What's Captured | Why It Matters |
-|----------|-----------------|----------------|
-| **Routes** | Paths, components, source files, dynamic segments | Identifies all pages and their locations |
-| **Interactive Elements** | Buttons, forms, inputs, links, etc. | Finds actionable items for user guidance |
-| **Element Properties** | Text, IDs, labels, accessibility attributes | Helps AI identify specific elements |
-| **Accessibility** | ARIA labels, roles, semantic HTML | Ensures guidance works for all users |
-| **Framework Info** | Routing system, conventions | Adapts guidance to framework patterns |
+| Category                 | What's Captured                                   | Why It Matters                           |
+| ------------------------ | ------------------------------------------------- | ---------------------------------------- |
+| **Routes**               | Paths, components, source files, dynamic segments | Identifies all pages and their locations |
+| **Interactive Elements** | Buttons, forms, inputs, links, etc.               | Finds actionable items for user guidance |
+| **Element Properties**   | Text, IDs, labels, accessibility attributes       | Helps AI identify specific elements      |
+| **Accessibility**        | ARIA labels, roles, semantic HTML                 | Ensures guidance works for all users     |
+| **Framework Info**       | Routing system, conventions                       | Adapts guidance to framework patterns    |
 
 ## Troubleshooting
 
 ### "Error: --key is required unless --dry-run is enabled"
 
 You're trying to upload without providing an API key. Either:
+
 - Add `--key sk_live_xxxxx` to your command
 - Use `--dry-run` to test without uploading
 
-### "Error: API key must start with sk_live_"
+### "Error: API key must start with sk*live*"
 
 Invalid API key format. API keys must be in the format `sk_live_xxxxx`. Check your key is correct.
 
 ### Scanner Takes Too Long
 
 The scanner can take longer on large projects. Common causes:
+
 - **Large component directory** - Reduce custom component paths if needed
 - **Many routes** - Projects with 100+ routes take proportionally longer
 
 To speed up:
+
 ```bash
 npx guideai-scan --dir ./packages/core --dry-run
 ```
@@ -221,11 +229,13 @@ npx guideai-scan --dir ./packages/core --dry-run
 ### "No routes detected"
 
 Framework detection may have failed. Check:
+
 - Is your project in one of the supported frameworks?
 - Is your project root directory correct? (use `--dir` if needed)
 - Do you have a standard routing structure?
 
 Try:
+
 ```bash
 npx guideai-scan --dry-run --output debug.json
 ```
@@ -249,6 +259,7 @@ Add to your `package.json`:
 ```
 
 Then run:
+
 ```bash
 npm run scan:upload
 ```
@@ -268,11 +279,11 @@ Upload knowledge base automatically when code changes:
 Import directly in your code:
 
 ```typescript
-import { scan } from '@guideai/scanner';
+import { scan } from "@guideai/scanner";
 
 const result = await scan({
-  key: 'sk_live_xxxxx',
-  dir: './src',
+  key: "sk_live_xxxxx",
+  dir: "./src",
   dryRun: false,
 });
 
@@ -281,6 +292,7 @@ console.log(`Found ${result.elements.length} elements`);
 ```
 
 Options:
+
 - `key` - API key for uploads (optional for dry-run)
 - `dir` - Project directory (defaults to current directory)
 - `dryRun` - Skip upload (defaults to false)
@@ -297,6 +309,7 @@ Options:
 ## Support
 
 For issues or questions:
+
 - Check the troubleshooting section above
 - Review scan preview output with `--dry-run --output debug.json`
 - Ensure your project matches one of the supported frameworks
