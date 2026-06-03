@@ -56,7 +56,7 @@ export async function scan(options: ScanOptions): Promise<ScanResult> {
     elements,
     ui_map: uiMap,
     duration_ms: Date.now() - start,
-  };
+  }; 
 
   // Step 5: Upload to backend (unless dry run)
   if (!options.dryRun) {
