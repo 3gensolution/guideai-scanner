@@ -11,7 +11,7 @@ program
   .description('Scan your project and upload knowledge base to GuideAI')
   .option('--key <key>', 'Site API key (required for uploads)')
   .option('--dir <dir>', 'Project root directory', process.cwd())
-  .option('--api-url <url>', 'GuideAI API URL', 'https://api.3guideai.com')
+  .option('--api-url <url>', 'GuideAI API URL', 'https://cdn.3guideai.com')
   .option('--output <file>', 'Write scan result JSON to a file')
   .option('--dry-run', 'Output JSON without uploading', false)
   .action(async (opts) => {

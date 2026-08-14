@@ -3,6 +3,7 @@ import type {
   ScannedElement,
   FrameworkType,
   UIMap,
+  ProductGraph,
 } from './shared-types';
 
 export interface ScanOptions {
@@ -18,6 +19,7 @@ export interface ScanResult {
   routes: Route[];
   elements: ScannedElement[];
   ui_map?: UIMap;
+  product_graph?: ProductGraph;
   duration_ms: number;
 }
 
@@ -35,5 +37,24 @@ export type {
   UIMap,
   UIMapNode,
   UIMapNodeKind,
+  ProductGraph,
+  ProductGraphNode,
+  ProductGraphNodeKind,
+  ProductGraphConnection,
+  ProductGraphConnectionKind,
+  ProductGraphApplication,
+  ProductGraphLayout,
   FingerprintSignals,
+  Confidence,
+  ConfidenceLevel,
+  Evidence,
+  ProductGraphModule,
+  ProductGraphSection,
+  ProductGraphStateFlow,
+  ProductGraphState,
+  ProductGraphStateTransition,
+  ProductGraphUserJourney,
+  ProductGraphJourneyStep,
 } from './shared-types';
+
+export { confidenceFromScore } from './shared-types';
