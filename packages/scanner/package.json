@@ -2,7 +2,7 @@
   "name": "@guideai/scanner",
   "version": "0.1.2",
   "bin": {
-    "guideai-scan": "./dist/cli.js"
+    "guideai-scan": "./dist/cli.js" 
   },
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
