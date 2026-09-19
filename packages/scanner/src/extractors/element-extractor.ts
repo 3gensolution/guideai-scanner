@@ -7,13 +7,14 @@ import { randomUUID } from 'crypto';
 import type { ScannedElement } from '../types';
 import { inferComponentName } from './component-name';
 import { buildFingerprint } from './signal-fields';
+import { collectTabDefinitions, tabOwnerForPath } from '../source-relationships';
 
 // Handle both ESM default and CJS module.exports
 const traverse = (typeof _traverse === 'function' ? _traverse : (_traverse as { default: typeof _traverse }).default) as typeof _traverse;
 
 /** Tags we want to extract as interactive elements (lowercased). */
 const INTERACTIVE_TAGS = new Set([
-  'button', 'a', 'input', 'select', 'textarea',
+  'button', 'a', 'input', 'select', 'option', 'textarea',
   'details', 'summary', 'dialog',
   // Common framework navigation components
   'link', 'navlink', 'routerlink',
@@ -44,6 +45,12 @@ interface HiddenContainerInfo {
   hidden: true;
   container: string;
   containerState: string;
+  /**
+   * What kind of thing hides the element. "conditional" means the container
+   * is a render-guard state variable (`showAdd`) with no user-facing name —
+   * downstream must not turn that into "click showAdd".
+   */
+  containerKind: string;
 }
 
 /**
@@ -57,6 +64,12 @@ interface HiddenContainerInfo {
 export async function extractElements(
   filePath: string,
   routePath: string,
+  /**
+   * When set, only elements inside the named component declaration are
+   * returned. Barrel files export many page components from one module; without
+   * a scope the first route to claim the file would absorb every element in it.
+   */
+  scopeComponent?: string,
 ): Promise<ScannedElement[]> {
   const ext = path.extname(filePath).toLowerCase();
 
@@ -72,7 +85,7 @@ export async function extractElements(
   }
 
   if (['.tsx', '.jsx', '.ts', '.js'].includes(ext)) {
-    return extractJsxElements(source, filePath, routePath);
+    return extractJsxElements(source, filePath, routePath, scopeComponent);
   }
 
   if (ext === '.svelte') {
@@ -87,12 +100,45 @@ export async function extractElements(
 }
 
 /**
+ * Locate the declaration node for a named component so extraction can be
+ * limited to its subtree.
+ *
+ * Handles the shapes page components are normally declared in:
+ *   export function LeadsPage() {}
+ *   export const LeadsPage = () => {}
+ *   const LeadsPage = forwardRef(function LeadsPage() {})
+ */
+function findComponentNode(ast: any, componentName: string): Node | undefined {
+  let found: Node | undefined;
+
+  traverse(ast, {
+    FunctionDeclaration(nodePath: any) {
+      if (found) return;
+      if (nodePath.node.id?.name === componentName) found = nodePath.node;
+    },
+    VariableDeclarator(nodePath: any) {
+      if (found) return;
+      if (nodePath.node.id?.type !== 'Identifier') return;
+      if (nodePath.node.id.name !== componentName) return;
+      if (nodePath.node.init) found = nodePath.node.init;
+    },
+    ClassDeclaration(nodePath: any) {
+      if (found) return;
+      if (nodePath.node.id?.name === componentName) found = nodePath.node;
+    },
+  });
+
+  return found;
+}
+
+/**
  * Extract interactive elements from JSX/TSX source code using AST parsing.
  */
 function extractJsxElements(
   source: string,
   filePath: string,
   routePath: string,
+  scopeComponent?: string,
 ): ScannedElement[] {
   const isTypeScript =
     filePath.endsWith('.ts') || filePath.endsWith('.tsx');
@@ -122,6 +168,21 @@ function extractJsxElements(
   const elements: ScannedElement[] = [];
   const functionMap = collectFunctionNodes(ast as unknown as Node);
   const staticCollections = collectStaticObjectCollections(ast as unknown as Node);
+  const tabDefinitions = collectTabDefinitions(ast, routePath, componentName || path.basename(filePath, path.extname(filePath)));
+
+  // Resolve the scope boundary once: the node whose subtree owns this route.
+  const scopeNode = scopeComponent ? findComponentNode(ast, scopeComponent) : undefined;
+  // A requested scope we cannot locate must yield nothing, otherwise the
+  // caller's per-route split would silently collapse back into whole-file
+  // attribution.
+  if (scopeComponent && !scopeNode) return [];
+  const inScope = (nodePath: any): boolean => {
+    if (!scopeNode) return true;
+    for (let p = nodePath; p; p = p.parentPath) {
+      if (p.node === scopeNode) return true;
+    }
+    return false;
+  };
 
   // Track the nearest heading for context
   let nearestHeading: string | undefined;
@@ -151,6 +212,10 @@ function extractJsxElements(
         return;
       }
 
+      // Outside the requested component scope this element belongs to another
+      // route exported from the same module.
+      if (!inScope(nodePath)) return;
+
       const mappedCollection = findMappedStaticCollection(nodePath, staticCollections);
       const repetitions = mappedCollection
         ? mappedCollection.items.map((values) => ({
@@ -179,8 +244,11 @@ function extractJsxElements(
             route_path: routePath,
             tag: 'button',
             text: tab.label,
+            accessible_name: tab.label,
+            section_label: nearestHeading,
             role: 'tab',
             action_type: 'click',
+            enabled: true,
             component_name: componentName,
             source_file: filePath,
             container: groupName,
@@ -244,6 +312,17 @@ function extractJsxElements(
               )
             : undefined;
         const selfHidden = Object.prototype.hasOwnProperty.call(attributes, 'hidden');
+        const formLabel = currentFormLabel || findNearestLabel(attributes, source);
+        const semanticContext = inferJsxSemanticContext(nodePath, nearestHeading);
+        const accessibleName = inferAccessibleName(attributes, textContent, formLabel);
+        const href =
+          attributes['href'] ||
+          attributes['to'] ||
+          navigationTarget ||
+          undefined;
+        const nativeOptionContainer = tagName === 'option'
+          ? findNativeSelectContainer(nodePath, componentName)
+          : undefined;
         const mappedTabContainer =
           repetition && attributes['role'] === 'tab'
             ? `${componentName || 'Page'}:${repetition.collectionName}`
@@ -262,25 +341,34 @@ function extractJsxElements(
             attributes['data-testid'] || attributes['data-test-id'] || undefined,
           component_name: componentName,
           source_file: filePath,
-          form_label: currentFormLabel || findNearestLabel(attributes, source),
+          form_label: formLabel,
+          accessible_name: accessibleName,
+          parent_label: semanticContext.parentLabel,
+          section_label: semanticContext.sectionLabel,
+          selector: buildSourceSelector(tagName, attributes, href),
+          enabled: inferEnabled(attributes),
           type: tagName === 'input' ? (attributes['type'] || 'text') : undefined,
-          href:
-            attributes['href'] ||
-            attributes['to'] ||
-            navigationTarget ||
-            undefined,
-          role: attributes['role'] || undefined,
+          href,
+          role: attributes['role'] || (tagName === 'option' ? 'option' : undefined),
+          action_type: inferSourceActionType(tagName, attributes, href),
           aria_controls: attributes['aria-controls'] || undefined,
           aria_expanded: attributes['aria-expanded'] || undefined,
           aria_haspopup: attributes['aria-haspopup'] || undefined,
+          ...tabOwnerForPath(nodePath, tabDefinitions),
           ...(selfHidden ? { hidden: true } : {}),
+          ...(nativeOptionContainer
+            ? { hidden: true, container: nativeOptionContainer, containerState: 'collapsed', container_kind: 'select' }
+            : {}),
           ...(mappedTabContainer ? { container: mappedTabContainer } : {}),
-          ...(hiddenInfo ? { hidden: true, container: hiddenInfo.container, containerState: hiddenInfo.containerState } : {}),
+          ...(hiddenInfo ? { hidden: true, container: hiddenInfo.container, containerState: hiddenInfo.containerState, container_kind: hiddenInfo.containerKind } : {}),
         };
 
         const fingerprint = buildFingerprint(partialElement);
-        if (nearestHeading) {
-          enrichFingerprintWithHeading(fingerprint, nearestHeading);
+        if (semanticContext.sectionLabel || nearestHeading) {
+          enrichFingerprintWithHeading(
+            fingerprint,
+            semanticContext.sectionLabel || nearestHeading!,
+          );
         }
 
         elements.push({
@@ -356,6 +444,7 @@ function extractHtmlElements(
 
     const inputType = tagName === 'input' ? (attributes['type'] || 'text') : undefined;
     const href = tagName === 'a' ? (attributes['href'] || undefined) : undefined;
+    const accessibleName = inferAccessibleName(attributes, textContent, formLabel);
 
     const partialElement: Partial<ScannedElement> = {
       id: randomUUID(),
@@ -371,9 +460,15 @@ function extractHtmlElements(
         attributes['data-testid'] || attributes['data-test-id'] || undefined,
       source_file: filePath,
       form_label: formLabel,
+      accessible_name: accessibleName,
+      parent_label: undefined,
+      section_label: nearestHeading,
+      selector: buildSourceSelector(tagName, attributes, href),
+      enabled: inferEnabled(attributes),
       type: inputType,
       href: href,
       role: attributes['role'] || undefined,
+      action_type: inferSourceActionType(tagName, attributes, href),
     };
 
     const fingerprint = buildFingerprint(partialElement);
@@ -401,11 +496,66 @@ function extractHtmlElements(
       route_path: routePath,
       tag: tagName,
       fingerprint,
-      ...(detailsInfo ? { hidden: true, container: detailsInfo.container, containerState: detailsInfo.containerState } : {}),
+      ...(detailsInfo ? { hidden: true, container: detailsInfo.container, containerState: detailsInfo.containerState, container_kind: detailsInfo.containerKind } : {}),
+    } as ScannedElement);
+  }
+
+  // <option> rows are rendered by the browser-owned select popup and are not
+  // visible in the normal page box tree. Extract them separately because the
+  // parent <select> regex consumes its entire inner HTML.
+  const optionPattern = /<option\b([^>]*)>([\s\S]*?)<\/option>/gi;
+  let optionMatch: RegExpExecArray | null;
+  while ((optionMatch = optionPattern.exec(source)) !== null) {
+    const attributes = parseHtmlAttributes(optionMatch[1] || '');
+    const text = stripHtmlTags(optionMatch[2] || '').trim() || undefined;
+    const partialElement: Partial<ScannedElement> = {
+      id: randomUUID(),
+      route_path: routePath,
+      tag: 'option',
+      text,
+      accessible_name: text,
+      role: 'option',
+      action_type: 'select',
+      enabled: true,
+      component_name: inferComponentName(filePath, source),
+      source_file: filePath,
+      hidden: true,
+      container: 'select dropdown',
+      containerState: 'collapsed',
+      container_kind: 'select',
+      name: attributes['name'] || undefined,
+    };
+    const fingerprint = buildFingerprint(partialElement);
+    elements.push({
+      ...partialElement,
+      id: partialElement.id!,
+      route_path: routePath,
+      tag: 'option',
+      fingerprint,
     } as ScannedElement);
   }
 
   return elements;
+}
+
+function findNativeSelectContainer(nodePath: any, componentName: string): string {
+  let current = nodePath.parentPath;
+  while (current) {
+    if (current.node?.type === 'JSXElement') {
+      const opening = current.node.openingElement;
+      if (opening && getJsxTagName(opening.name) === 'select') {
+        const attributes = extractJsxAttributes(opening.attributes);
+        return (
+          attributes['aria-label'] ||
+          attributes['name'] ||
+          attributes['id'] ||
+          `${componentName || 'Page'} select dropdown`
+        );
+      }
+    }
+    current = current.parentPath;
+  }
+  return `${componentName || 'Page'} select dropdown`;
 }
 
 /**
@@ -478,6 +628,29 @@ function getJsxTagName(nameNode: any): string {
 }
 
 /**
+ * The label a ternary shows at rest.
+ *
+ * `{pending ? 'Creating…' : 'Blank Demo'}` is one control with two states, and
+ * the page shows exactly one of them. Joining both recorded "Creating… Blank
+ * Demo", which matches neither state on the live page. A branch that reads as
+ * work in progress (it trails off with an ellipsis) is the transient one;
+ * otherwise the falsy branch is the default state, as for attributes.
+ */
+function restingTernaryLabel(consequent: any, alternate: any): string | undefined {
+  const literal = (node: any): string | undefined =>
+    node?.type === 'StringLiteral' && node.value?.trim() ? node.value.trim() : undefined;
+  const whenTrue = literal(consequent);
+  const whenFalse = literal(alternate);
+  const inProgress = (value: string | undefined) => Boolean(value && /(\u2026|\.\.\.)$/.test(value));
+
+  if (whenTrue && inProgress(whenTrue) && whenFalse && !inProgress(whenFalse)) return whenFalse;
+  if (whenFalse && inProgress(whenFalse) && whenTrue && !inProgress(whenTrue)) return whenTrue;
+  return whenFalse ?? whenTrue;
+}
+
+/**
+ * Extract text content from JSX element children.
+ *//**
  * Extract text content from JSX element children.
  */
 function extractJsxChildrenText(
@@ -506,16 +679,11 @@ function extractJsxChildrenText(
         const text = quasis.map((q) => q.value.raw).join('...');
         if (text.trim()) textParts.push(text.trim());
       } else if (expr.type === 'ConditionalExpression') {
-        const consequent = (expr as any).consequent;
-        const alternate = (expr as any).alternate;
-        if (consequent?.type === 'StringLiteral' && consequent.value) {
-          textParts.push(consequent.value);
-        }
-        if (alternate?.type === 'StringLiteral' && alternate.value) {
-          if (!textParts.includes(alternate.value)) {
-            textParts.push(alternate.value);
-          }
-        }
+        const label = restingTernaryLabel(
+          (expr as any).consequent,
+          (expr as any).alternate,
+        );
+        if (label) textParts.push(label);
       }
     }
     // Recursively handle nested JSX elements
@@ -600,6 +768,147 @@ function extractJsxAttributes(
   }
 
   return result;
+}
+
+interface SemanticContext {
+  parentLabel?: string;
+  sectionLabel?: string;
+}
+
+const SECTION_TAGS = new Set([
+  'section', 'article', 'main', 'aside', 'nav', 'header', 'footer', 'form',
+  'fieldset', 'dialog',
+]);
+
+/**
+ * Recover the human hierarchy around a JSX control. A repeated label such as
+ * "Launch" is only useful when its card ("Production") and section
+ * ("Deployment") travel with it into the knowledge base.
+ */
+function inferJsxSemanticContext(nodePath: any, fallbackHeading?: string): SemanticContext {
+  let current = nodePath.parentPath?.parentPath;
+  let parentLabel: string | undefined;
+  let sectionLabel: string | undefined;
+  let depth = 0;
+
+  while (current && depth < 10) {
+    if (current.node?.type === 'JSXElement') {
+      const tag = getJsxTagName(current.node.openingElement?.name);
+      const label = jsxContainerLabel(current.node);
+      if (!parentLabel && label) parentLabel = label;
+      if (!sectionLabel && SECTION_TAGS.has(tag)) {
+        sectionLabel = label || fallbackHeading;
+      }
+    }
+    current = current.parentPath;
+    depth += 1;
+  }
+
+  return {
+    parentLabel: cleanSemanticLabel(parentLabel),
+    sectionLabel: cleanSemanticLabel(sectionLabel || fallbackHeading),
+  };
+}
+
+function jsxContainerLabel(element: any): string | undefined {
+  const attributes = extractJsxAttributes(element.openingElement?.attributes ?? []);
+  for (const key of ['aria-label', 'data-label', 'title']) {
+    const value = cleanSemanticLabel(attributes[key]);
+    if (value && value !== 'expression') return value;
+  }
+
+  for (const child of element.children ?? []) {
+    if (child.type !== 'JSXElement') continue;
+    const tag = getJsxTagName(child.openingElement?.name);
+    if (!/^h[1-6]$/.test(tag) && tag !== 'legend') continue;
+    const value = extractJsxChildrenText(child as JsxElementNode);
+    if (value) return cleanSemanticLabel(value);
+  }
+  return undefined;
+}
+
+function inferAccessibleName(
+  attributes: Record<string, string>,
+  text?: string,
+  formLabel?: string,
+): string | undefined {
+  return cleanSemanticLabel(
+    attributes['aria-label']
+      || formLabel
+      || text
+      || attributes['placeholder']
+      || attributes['title']
+      || attributes['alt']
+      || attributes['name'],
+  );
+}
+
+function inferEnabled(attributes: Record<string, string>): boolean | undefined {
+  const disabled = attributes['disabled'];
+  const ariaDisabled = attributes['aria-disabled'];
+  if (disabled === 'true' || ariaDisabled === 'true') return false;
+  if (disabled === 'expression' || ariaDisabled === 'expression') return undefined;
+  return true;
+}
+
+function inferSourceActionType(
+  tagName: string,
+  attributes: Record<string, string>,
+  href?: string,
+): string {
+  if (['a', 'link', 'navlink', 'routerlink'].includes(tagName) || href) return 'navigate';
+  if (tagName === 'form') return 'submit';
+  if (tagName === 'select' || tagName === 'option') return 'select';
+  if (tagName === 'textarea') return 'fill';
+  if (tagName === 'input') {
+    const type = (attributes['type'] || 'text').toLowerCase();
+    return ['button', 'submit', 'reset', 'checkbox', 'radio', 'range', 'file', 'color']
+      .includes(type) ? 'click' : 'fill';
+  }
+  return 'click';
+}
+
+function buildSourceSelector(
+  tagName: string,
+  attributes: Record<string, string>,
+  href?: string,
+): string | undefined {
+  const stable: Array<[string, string | undefined]> = [
+    ['data-guideai', attributes['data-guideai']],
+    ['data-testid', attributes['data-testid'] || attributes['data-test-id']],
+  ];
+  for (const [name, value] of stable) {
+    if (usableStaticValue(value)) return `[${name}="${cssAttributeEscape(value!)}"]`;
+  }
+  if (usableStaticValue(attributes['id'])) return `#${cssIdentifierEscape(attributes['id'])}`;
+  if (usableStaticValue(attributes['name'])) {
+    return `${tagName}[name="${cssAttributeEscape(attributes['name'])}"]`;
+  }
+  if (usableStaticValue(attributes['aria-label'])) {
+    return `${tagName}[aria-label="${cssAttributeEscape(attributes['aria-label'])}"]`;
+  }
+  if (tagName === 'a' && usableStaticValue(href)) {
+    return `a[href="${cssAttributeEscape(href!)}"]`;
+  }
+  return undefined;
+}
+
+function usableStaticValue(value?: string): boolean {
+  return Boolean(value && value !== 'expression' && value !== '...');
+}
+
+function cleanSemanticLabel(value?: string): string | undefined {
+  const clean = value?.replace(/\s+/g, ' ').trim();
+  if (!clean || clean === 'expression') return undefined;
+  return clean.slice(0, 160);
+}
+
+function cssAttributeEscape(value: string): string {
+  return value.replace(/["\\]/g, '\\$&');
+}
+
+function cssIdentifierEscape(value: string): string {
+  return value.replace(/([^a-zA-Z0-9_-])/g, '\\$1');
 }
 
 function extractNavigationTargetFromJsxAttributes(
@@ -1025,20 +1334,35 @@ function extractNavigationConfigElements(
       const navItem = extractNavItemFromObjectExpression(path.node as any);
       if (!navItem?.href) return;
 
+      // A nav item declared in a config array carries no trace of the JSX that
+      // renders it, so walking up from the JSX (detectHiddenContainer) never
+      // reaches it. Walk up the *config* instead: an enclosing group object
+      // holding this item in its items/children array is what puts it behind a
+      // menu toggle at runtime.
+      const group = findOwningNavGroup(path);
+
       const partialElement: Partial<ScannedElement> = {
         id: randomUUID(),
         route_path: routePath,
         tag: 'link',
         text: navItem.text,
+        accessible_name: navItem.text,
+        parent_label: group,
+        section_label: group || componentName,
+        selector: `a[href="${cssAttributeEscape(navItem.href)}"]`,
         href: navItem.href,
         component_name: componentName,
         source_file: filePath,
         role: 'link',
-        ...(navItem.container
+        action_type: 'navigate',
+        enabled: true,
+        ...(group
           ? {
               hidden: true,
-              container: navItem.container,
+              container: group,
               containerState: 'collapsed',
+              container_toggle_label: group,
+              container_kind: 'menu',
             }
           : {}),
       };
@@ -1058,12 +1382,12 @@ function extractNavigationConfigElements(
 
 function extractNavItemFromObjectExpression(node: {
   properties?: Array<any>;
-}): { text?: string; href?: string; container?: string } | undefined {
+}): { text?: string; href?: string } | undefined {
   if (!node.properties?.length) return undefined;
 
   let text: string | undefined;
   let href: string | undefined;
-  let container: string | undefined;
+  let pathLike: string | undefined;
 
   for (const property of node.properties) {
     if (property.type !== 'ObjectProperty' && property.type !== 'Property') continue;
@@ -1074,15 +1398,121 @@ function extractNavItemFromObjectExpression(node: {
       text = extractStaticValue(property.value) ?? text;
     } else if (keyName === 'link' || keyName === 'href' || keyName === 'to') {
       href = extractStaticValue(property.value) ?? href;
-    } else if (keyName === 'dropdown' || keyName === 'items' || keyName === 'children') {
-      container = text ?? container;
+    } else if (keyName === 'path' || keyName === 'route' || keyName === 'url') {
+      // Hand-rolled routers routinely name the destination `path`/`route`/`url`
+      // rather than `href`/`to`, since no routing library dictates the shape.
+      // These rank below the explicit link keys: an item carrying both (say
+      // `{ to: '/a', path: '/a/:id' }`) is describing its link with `to`.
+      pathLike = extractStaticValue(property.value) ?? pathLike;
     }
   }
+
+  // A path-like key is only trusted when nothing described this item as a
+  // link outright, and only when it looks like a destination a user can be
+  // sent to. `path` is a far busier key name than `href` — it also holds
+  // asset paths, SVG geometry and API endpoints — so an item that fails
+  // this check is left out rather than guessed at.
+  href = href ?? (isNavigableDestination(pathLike) ? pathLike : undefined);
 
   if (!href) return undefined;
   if (!href.startsWith('/')) return undefined;
 
-  return { text, href, container };
+  return { text, href };
+}
+
+/** File extensions that mark a path as an asset reference, not a route. */
+const ASSET_PATH_PATTERN = /\.[a-z0-9]{1,5}$/i;
+
+/**
+ * Decide whether a `path`/`route`/`url` value names a page a user can visit.
+ *
+ * Rejects the three things that otherwise masquerade as routes in a config
+ * array: SVG path data (`/M0 0 L10 10`), asset references (`/logo.svg`), and
+ * API endpoints (`/api/v1/users`), which is what a nav config never holds.
+ */
+function isNavigableDestination(value?: string): boolean {
+  if (!value || !value.startsWith('/')) return false;
+
+  // SVG geometry: a run of coordinate commands, never a URL path.
+  if (/^\/[MmLlHhVvCcSsQqTtAaZz][\s\d.,-]/.test(value)) return false;
+
+  const [pathname] = value.split(/[?#]/);
+  const segments = pathname.split('/').filter(Boolean);
+
+  // `/logo.svg`, `/docs/readme.md` — a file, not a screen. Route params
+  // (`/orders/:id`) and trailing slashes are unaffected.
+  const lastSegment = segments[segments.length - 1];
+  if (lastSegment && ASSET_PATH_PATTERN.test(lastSegment)) return false;
+
+  // `/api/...` is a backend endpoint; navigating there leaves the app.
+  if (segments[0] === 'api') return false;
+
+  return true;
+}
+
+/** Property names whose array value holds a nav group's child items. */
+const NAV_GROUP_ITEMS_KEYS = new Set(['items', 'children', 'links', 'dropdown', 'submenu', 'subItems']);
+
+/** Property names that carry a nav group's display label. */
+const NAV_GROUP_LABEL_KEYS = new Set(['label', 'title', 'text', 'name', 'heading']);
+
+/**
+ * Find the label of the nav group that contains this item, by walking up the
+ * config object tree.
+ *
+ * A group is an object with a string label and an array property holding the
+ * items — `{ label: 'Content', items: [ { to: '/guide-pro', label: 'Guide Pro' } ] }`.
+ * The item must actually sit inside that array, so a sibling object with an
+ * unrelated `items` key cannot claim it.
+ *
+ * Returns undefined for a top-level item, which is the common case and must
+ * stay uncontaminated — wrongly marking a visible link as hidden would make
+ * every guide insert a menu-opening step that does nothing.
+ */
+function findOwningNavGroup(path: any): string | undefined {
+  const item = path.node;
+  let current = path.parentPath;
+  let depth = 0;
+
+  // Config nesting is shallow; the cap stops a pathological file from walking
+  // the whole module tree looking for a group that is not there.
+  while (current && depth < 8) {
+    if (current.node?.type === 'ObjectExpression') {
+      // The nearest enclosing group wins, so nested menus report the submenu
+      // the item is actually in rather than the top-level section.
+      const label = navGroupLabelContaining(current.node, item);
+      if (label) return label;
+    }
+    current = current.parentPath;
+    depth += 1;
+  }
+  return undefined;
+}
+
+/**
+ * The group label of *node*, but only when *item* is an element of one of its
+ * items arrays.
+ */
+function navGroupLabelContaining(node: any, item: any): string | undefined {
+  let label: string | undefined;
+  let holdsItem = false;
+
+  for (const property of node.properties ?? []) {
+    if (property.type !== 'ObjectProperty' && property.type !== 'Property') continue;
+    const keyName = getObjectPropertyKeyName(property.key);
+    if (!keyName) continue;
+
+    if (NAV_GROUP_LABEL_KEYS.has(keyName)) {
+      label = extractStaticValue(property.value) ?? label;
+    } else if (NAV_GROUP_ITEMS_KEYS.has(keyName)) {
+      if (property.value?.type === 'ArrayExpression'
+        && property.value.elements?.some((element: any) => element === item)) {
+        holdsItem = true;
+      }
+    }
+  }
+
+  return holdsItem && label ? label : undefined;
 }
 
 function getObjectPropertyKeyName(key: any): string | undefined {
@@ -1187,6 +1617,8 @@ function detectHiddenContainer(nodePath: any): HiddenContainerInfo | null {
           hidden: true,
           container: conditionName,
           containerState: 'collapsed',
+          // A render-guard variable, not a label anyone can read on screen.
+          containerKind: 'conditional',
         };
       }
     }
@@ -1199,6 +1631,7 @@ function detectHiddenContainer(nodePath: any): HiddenContainerInfo | null {
           hidden: true,
           container: conditionName,
           containerState: 'collapsed',
+          containerKind: 'conditional',
         };
       }
     }
@@ -1213,6 +1646,7 @@ function detectHiddenContainer(nodePath: any): HiddenContainerInfo | null {
             hidden: true,
             container: compName,
             containerState: 'collapsed',
+            containerKind: collapsibleComponentKind(compName),
           };
         }
       }
@@ -1227,6 +1661,7 @@ function detectHiddenContainer(nodePath: any): HiddenContainerInfo | null {
               hidden: true,
               container: `${obj.name}.${prop.name}`,
               containerState: 'collapsed',
+              containerKind: collapsibleComponentKind(fullName),
             };
           }
         }
@@ -1252,6 +1687,7 @@ function detectHiddenContainer(nodePath: any): HiddenContainerInfo | null {
             hidden: true,
             container: 'details',
             containerState: 'collapsed',
+            containerKind: 'accordion',
           };
         }
       }
@@ -1268,6 +1704,16 @@ function detectHiddenContainer(nodePath: any): HiddenContainerInfo | null {
  * Handles: Identifier (open), MemberExpression (state.open),
  * UnaryExpression (!closed), and CallExpression (isOpen()).
  */
+/** Map a collapsible component name onto the container kind a user would name it. */
+function collapsibleComponentKind(componentName: string): string {
+  const name = componentName.toLowerCase();
+  if (name.includes('drawer') || name.includes('offcanvas')) return 'drawer';
+  if (name.includes('dropdown') || name.includes('popover')) return 'dropdown';
+  if (name.includes('menu')) return 'menu';
+  if (name.includes('tab')) return 'tabs';
+  return 'accordion';
+}
+
 function extractConditionName(node: any): string | null {
   if (!node) return null;
 

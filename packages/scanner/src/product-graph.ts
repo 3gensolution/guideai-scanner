@@ -666,6 +666,11 @@ function buildElementNode(element: ScannedElement): ProductGraphNode {
       aria_expanded: element.aria_expanded,
       aria_haspopup: element.aria_haspopup,
       aria_label: element.aria_label,
+      accessible_name: element.accessible_name,
+      parent_label: element.parent_label,
+      section_label: element.section_label,
+      visible: element.visible,
+      enabled: element.enabled,
       placeholder: element.placeholder,
       name: element.name,
       hidden: element.hidden,
@@ -1138,12 +1143,13 @@ function bestSelector(element: ScannedElement): string | undefined {
   if (element.data_testid) return `[data-testid="${cssEscape(element.data_testid)}"]`;
   if (element.dom_id) return `#${cssEscape(element.dom_id)}`;
   if (element.name) return `[name="${cssEscape(element.name)}"]`;
-  return undefined;
+  return element.selector;
 }
 
 function elementLabel(element: ScannedElement): string {
   return normalizeLabel(
-    element.text ||
+    element.accessible_name ||
+      element.text ||
       element.aria_label ||
       element.placeholder ||
       element.form_label ||

@@ -28,13 +28,18 @@ export function buildFingerprint(
     css_path: element.fingerprint?.tier3_structural?.css_path || undefined,
     xpath: element.fingerprint?.tier3_structural?.xpath || undefined,
     dom_depth: element.fingerprint?.tier3_structural?.dom_depth,
-    parent_text: element.fingerprint?.tier4_context?.parent_text || undefined,
+    parent_text:
+      element.parent_label ||
+      element.fingerprint?.tier4_context?.parent_text ||
+      undefined,
     form_context:
       element.fingerprint?.tier4_context?.form_context ||
       element.form_label ||
       undefined,
     nearest_heading:
-      element.fingerprint?.tier4_context?.nearest_heading || undefined,
+      element.section_label ||
+      element.fingerprint?.tier4_context?.nearest_heading ||
+      undefined,
     visual_zone: element.fingerprint?.tier4_context?.visual_zone || undefined,
     bounding_rect:
       element.fingerprint?.tier5_position?.bounding_rect || undefined,

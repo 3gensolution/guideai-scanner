@@ -11,11 +11,14 @@ import {
   extractHtmlRoutes,
   extractRemixRoutes,
   extractSvelteKitRoutes,
+  extractCustomRouterRoutes,
 } from './detectors';
 import { extractElements } from './extractors';
 import { uploadKnowledgeBase } from './uploader';
 import { buildUIMap, resolveToggleRelationships } from './ui-map';
 import { buildProductGraph } from './product-graph';
+import { renderedSourceImports, type TabOwner } from './source-relationships';
+import { bestMatchingRoutePath } from './route-match';
 
 /**
  * Run the full GuideAI scanning pipeline:
@@ -118,6 +121,9 @@ async function extractRoutes(
     case 'sveltekit':
       return extractSvelteKitRoutes(rootDir);
 
+    case 'react-spa':
+      return extractCustomRouterRoutes(rootDir);
+
     case 'plain-html':
       return extractHtmlRoutes(rootDir);
 
@@ -144,19 +150,58 @@ async function extractAllElements(
   const allElements: ScannedElement[] = [];
   const processedFiles = new Set<string>();
 
-  // Process routes with known source files
+  // Follow rendered imports from explicit route entry components. A shared
+  // component may appear on several routes (or tabs), so dedupe by context.
+  const visitedContexts = new Set<string>();
+  async function visit(
+    file: string,
+    route: string,
+    owner?: TabOwner,
+    ancestry = new Set<string>(),
+    // Set only for a route's entry file when that file also defines other
+    // routes' components; imports reached from it are scanned in full.
+    scopeComponent?: string,
+  ): Promise<void> {
+    const key = `${file}|${route}|${owner?.tab_group || ''}|${owner?.tab || ''}`;
+    if (visitedContexts.has(key) || ancestry.has(file)) return;
+    visitedContexts.add(key);
+    processedFiles.add(file);
+    const elements = await extractElements(file, route, scopeComponent);
+    allElements.push(...elements.map(element => owner && !element.tab ? { ...element, ...owner } : element));
+    const nextAncestry = new Set(ancestry).add(file);
+    for (const imported of renderedSourceImports(file, route, rootDir)) {
+      // Another route entry isn't owned by this screen merely because a
+      // router/layout imports it. Route declarations are scanned separately.
+      if (routes.some(r => r.source_file && path.resolve(rootDir, r.source_file) === imported.file && r.path !== route)) continue;
+      await visit(imported.file, route, imported.owner || owner, nextAncestry);
+    }
+  }
+  // Barrel modules export many page components from one file. Group routes by
+  // source file so a shared file is split per component instead of being
+  // claimed whole by whichever route reached it first.
+  const routesPerFile = new Map<string, number>();
   for (const route of routes) {
     if (!route.source_file) continue;
+    const absolutePath = path.resolve(rootDir, route.source_file);
+    routesPerFile.set(absolutePath, (routesPerFile.get(absolutePath) || 0) + 1);
+  }
 
-    const absolutePath = path.isAbsolute(route.source_file)
-      ? route.source_file
-      : path.join(rootDir, route.source_file);
+  for (const route of routes) {
+    if (!route.source_file) continue;
+    const absolutePath = path.resolve(rootDir, route.source_file);
 
-    if (processedFiles.has(absolutePath)) continue;
-    processedFiles.add(absolutePath);
+    // When several routes share one module, limit each to its own component so
+    // siblings do not absorb each other's elements.
+    const scope = (routesPerFile.get(absolutePath) || 0) > 1
+      ? route.component_name
+      : undefined;
 
-    const elements = await extractElements(absolutePath, route.path);
-    allElements.push(...elements);
+    if (route.component_name) {
+      await visit(absolutePath, route.path, undefined, new Set<string>(), scope);
+    } else if (!processedFiles.has(absolutePath)) {
+      processedFiles.add(absolutePath);
+      allElements.push(...await extractElements(absolutePath, route.path));
+    }
   }
 
   // For SPA frameworks, also scan common component directories
@@ -174,7 +219,42 @@ async function extractAllElements(
     }
   }
 
-  return deduplicateElements(allElements);
+  return dropAmbiguousSelectors(deduplicateElements(allElements));
+}
+
+/**
+ * Clear the selector on elements that do not own it uniquely.
+ *
+ * ``buildSourceSelector`` works one element at a time, so it cannot tell that
+ * a sidebar "Overview" link, a header "Home" link and a logo all render as
+ * ``a[href="/"]``. The player resolves a selector with ``querySelector``,
+ * which returns the first match — so a shared selector silently highlights
+ * whichever of them happens to come first in the DOM.
+ *
+ * The elements themselves are kept: they are genuinely distinct controls, and
+ * their fingerprints carry the text that tells them apart. Only the selector
+ * is dropped, which moves them onto the player's fingerprint tier rather than
+ * leaving them pointing at a sibling.
+ *
+ * Scoped per route, since two routes each having their own "Save" is not a
+ * collision — only one of those pages is ever on screen.
+ */
+export function dropAmbiguousSelectors(elements: ScannedElement[]): ScannedElement[] {
+  const counts = new Map<string, number>();
+  for (const el of elements) {
+    if (!el.selector) continue;
+    const key = `${el.route_path}|${el.selector}`;
+    counts.set(key, (counts.get(key) || 0) + 1);
+  }
+
+  if (![...counts.values()].some((count) => count > 1)) return elements;
+
+  return elements.map((el) => {
+    if (!el.selector) return el;
+    if ((counts.get(`${el.route_path}|${el.selector}`) || 0) < 2) return el;
+    const { selector: _dropped, ...rest } = el;
+    return rest as ScannedElement;
+  });
 }
 
 /**
@@ -443,33 +523,7 @@ function segmentsToRoutePath(segments: string[]): string {
 }
 
 function matchExistingRoute(candidatePath: string, routes: Route[]): string {
-  const normalizedCandidate = normalizeRoutePath(candidatePath);
-  const exact = routes.find((route) => normalizeRoutePath(route.path) === normalizedCandidate);
-  if (exact) return exact.path;
-
-  let bestRoute = '/';
-  let bestScore = -1;
-
-  for (const route of routes) {
-    const normalizedRoute = normalizeRoutePath(route.path);
-    if (
-      normalizedCandidate === normalizedRoute ||
-      normalizedCandidate.startsWith(`${normalizedRoute}/`) ||
-      normalizedRoute.startsWith(`${normalizedCandidate}/`)
-    ) {
-      const score = normalizedRoute.split('/').filter(Boolean).length;
-      if (score > bestScore) {
-        bestScore = score;
-        bestRoute = route.path;
-      }
-    }
-  }
-
-  return bestRoute;
-}
-
-function normalizeRoutePath(routePath: string): string {
-  return routePath.replace(/\/+$/, '') || '/';
+  return bestMatchingRoutePath(candidatePath, routes);
 }
 
 /**
@@ -489,6 +543,8 @@ function deduplicateElements(elements: ScannedElement[]): ScannedElement[] {
       el.aria_label || '',
       el.name || '',
       el.route_path,
+      el.tab_group || '',
+      el.tab || '',
       el.source_file || '',
       el.container || '',
     ].join('|');

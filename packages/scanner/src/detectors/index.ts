@@ -7,3 +7,4 @@ export { extractVueRoutes } from './vue-router';
 export { extractHtmlRoutes } from './html';
 export { extractRemixRoutes } from './remix';
 export { extractSvelteKitRoutes } from './sveltekit';
+export { extractCustomRouterRoutes } from './custom-router';

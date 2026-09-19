@@ -41,6 +41,7 @@ export type FrameworkType =
   | 'nuxt'
   | 'remix'
   | 'sveltekit'
+  | 'react-spa'
   | 'plain-html';
 
 export interface Route {
@@ -73,12 +74,27 @@ export interface ScannedElement {
   component_name?: string;
   source_file?: string;
   form_label?: string;
+  /** Name exposed to assistive technology or inferred from visible labeling. */
+  accessible_name?: string;
+  /** Human-readable label of the nearest card, row, fieldset, or group. */
+  parent_label?: string;
+  /** Human-readable heading of the enclosing page section. */
+  section_label?: string;
+  /** Best stable selector the source scanner can construct. */
+  selector?: string;
+  /** Runtime scanners set this from computed DOM visibility. */
+  visible?: boolean;
+  /** False only when source attributes prove the control is disabled. */
+  enabled?: boolean;
   fingerprint: FingerprintSignals;
   type?: string;
   href?: string;
   role?: string;
   action_type?: string;
   text_features?: string;
+  tab?: string;
+  tab_group?: string;
+  tab_toggle_selector?: string;
   aria_controls?: string;
   aria_expanded?: string;
   aria_haspopup?: string;
@@ -94,6 +110,13 @@ export interface ScannedElement {
   container_toggle_selector?: string;
   /** Human-readable label of the toggle element (e.g. "Open menu"). */
   container_toggle_label?: string;
+  /**
+   * What kind of container hides this element — "menu" for a nav group,
+   * dropdown or hamburger menu, "accordion", "tabs", "drawer", "dialog".
+   * Lets a guide say "open the Content menu" rather than the generic
+   * "expand the Content section".
+   */
+  container_kind?: string;
 }
 
 export type UIMapNodeKind =

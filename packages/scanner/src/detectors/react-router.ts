@@ -4,6 +4,7 @@ import fg from 'fast-glob';
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import type { Route } from '../types';
+import { resolveSourceImport } from '../source-relationships';
 
 // Handle both ESM default and CJS module.exports
 const traverse = (typeof _traverse === 'function' ? _traverse : (_traverse as { default: typeof _traverse }).default) as typeof _traverse;
@@ -82,14 +83,35 @@ function parseRoutesFromFile(
   });
 
   const routes: Route[] = [];
+  const imports = new Map<string, string>();
+  traverse(ast, { ImportDeclaration(p) {
+    const resolved = resolveSourceImport(filePath, p.node.source.value, rootDir);
+    if (resolved) for (const spec of p.node.specifiers) imports.set(spec.local.name, resolved);
+  } });
+  function renderedComponent(node: any): { source_file: string; component_name: string } | undefined {
+    if (!node) return undefined;
+    if (node.type === 'JSXElement') {
+      for (const child of node.children || []) {
+        const found = renderedComponent(child);
+        if (found) return found;
+      }
+      const name = node.openingElement.name.name;
+      const resolved = imports.get(name);
+      if (resolved) return { source_file: path.relative(rootDir, resolved), component_name: name };
+    }
+    if (node.type === 'JSXExpressionContainer') return renderedComponent(node.expression);
+    if (node.type === 'ConditionalExpression') return renderedComponent(node.consequent) || renderedComponent(node.alternate);
+    if (node.type === 'LogicalExpression') return renderedComponent(node.right);
+    return undefined;
+  }
 
   // Track parent-child route nesting via a stack
   const pathStack: string[] = [];
 
   traverse(ast, {
-    JSXOpeningElement: {
+    JSXElement: {
       enter(nodePath) {
-        const nameNode = nodePath.node.name;
+        const nameNode = nodePath.node.openingElement.name;
         let tagName = '';
 
         if (nameNode.type === 'JSXIdentifier') {
@@ -102,7 +124,7 @@ function parseRoutesFromFile(
           return;
         }
 
-        const pathAttr = nodePath.node.attributes.find(
+        const pathAttr = nodePath.node.openingElement.attributes.find(
           (attr) =>
             attr.type === 'JSXAttribute' &&
             attr.name.type === 'JSXIdentifier' &&
@@ -131,20 +153,25 @@ function parseRoutesFromFile(
 
         // Resolve the full path from the nesting stack
         const fullPath = resolveNestedPath(pathStack, routePath);
-        pathStack.push(routePath);
+        pathStack.push(fullPath);
 
         const dynamicSegments = extractDynamicSegments(fullPath);
 
+        const elementAttr: any = nodePath.node.openingElement.attributes.find(
+          (attr: any) => attr.type === 'JSXAttribute' && attr.name.name === 'element',
+        );
+        const component = renderedComponent(elementAttr?.value);
         routes.push({
           path: fullPath,
           source_file: path.relative(rootDir, filePath),
+          ...component,
           dynamic_segments: dynamicSegments,
           auth_required: false,
           headings: [],
         });
       },
       exit(nodePath) {
-        const nameNode = nodePath.node.name;
+        const nameNode = nodePath.node.openingElement.name;
         let tagName = '';
         if (nameNode.type === 'JSXIdentifier') {
           tagName = nameNode.name;
@@ -154,7 +181,7 @@ function parseRoutesFromFile(
 
         if (tagName === 'Route') {
           // Check if this Route had a path attribute
-          const pathAttr = nodePath.node.attributes.find(
+          const pathAttr = nodePath.node.openingElement.attributes.find(
             (attr) =>
               attr.type === 'JSXAttribute' &&
               attr.name.type === 'JSXIdentifier' &&

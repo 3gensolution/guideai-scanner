@@ -305,10 +305,18 @@ function buildElementNode(element: ScannedElement, routeKeys: Set<string>): UIMa
       type: element.type,
       href: element.href,
       aria_label: element.aria_label,
+      accessible_name: element.accessible_name,
+      parent_label: element.parent_label,
+      section_label: element.section_label,
+      visible: element.visible,
+      enabled: element.enabled,
       placeholder: element.placeholder,
       name: element.name,
       data_guideai: element.data_guideai,
       data_testid: element.data_testid,
+      tab: element.tab,
+      tab_group: element.tab_group,
+      tab_toggle_selector: element.tab_toggle_selector,
       aria_controls: element.aria_controls,
       aria_expanded: element.aria_expanded,
       aria_haspopup: element.aria_haspopup,
@@ -318,6 +326,7 @@ function buildElementNode(element: ScannedElement, routeKeys: Set<string>): UIMa
       container_toggle_id: element.container_toggle_id,
       container_toggle_selector: element.container_toggle_selector,
       container_toggle_label: element.container_toggle_label,
+      container_kind: element.container_kind,
       fingerprint_score: element.fingerprint?.total_score,
       linked_route_path: linkedRoute ? pathFromRouteKey(linkedRoute) : undefined,
       linked_route_origin: linkedRoute ? originFromRouteKey(linkedRoute) : undefined,
@@ -408,6 +417,14 @@ function layoutShellConnections(
         href: element.href,
         source_file: element.source_file,
         component_name: element.component_name,
+        // A shell link inside a collapsed nav group is not clickable until
+        // that group is opened. Without this the link reads as always
+        // available and a guide sends the user to click something invisible.
+        hidden: element.hidden,
+        container: element.container,
+        container_kind: element.container_kind,
+        container_toggle_label: element.container_toggle_label,
+        container_toggle_selector: element.container_toggle_selector,
       },
     });
   }
@@ -603,11 +620,12 @@ function bestSelector(element: ScannedElement): string {
   const tier3 = element.fingerprint?.tier3_structural;
   if (tier1?.id) return `#${cssIdentEscape(tier1.id)}`;
   if (tier1?.name) return `[name="${cssAttrEscape(tier1.name)}"]`;
-  return tier3?.css_path || '';
+  return element.selector || tier3?.css_path || '';
 }
 
 function elementLabel(element: ScannedElement): string {
   const label =
+    element.accessible_name ||
     element.text ||
     element.aria_label ||
     element.placeholder ||
@@ -989,6 +1007,15 @@ function cssIdentEscape(value: string): string {
 const CONDITIONAL_STATE_RE = /^(is)?_?(open|show|visible|expanded|active|collapsed|toggled|hidden|closed)/i;
 
 /**
+ * Labels that are really tag-name fallbacks, not something a user can read on
+ * screen. "Click button" is not an instruction anyone can follow.
+ */
+const GENERIC_TOGGLE_LABELS = new Set([
+  'button', 'div', 'span', 'a', 'link', 'navlink', 'summary', 'details',
+  'svg', 'icon', 'expression', 'input',
+]);
+
+/**
  * Post-processing pass that links hidden elements to their toggle controls.
  *
  * After all elements are extracted, this function finds which button/toggle
@@ -1025,13 +1052,23 @@ export function resolveToggleRelationships(elements: ScannedElement[]): void {
     const selector = bestSelector(toggle) || toggleFallbackSelector(toggle);
     const label = elementLabel(toggle);
 
+    // elementLabel() falls back to the tag name, so an unlabelled toggle
+    // yields "button". Overwriting a real container label with that turned
+    // "open the Content menu" into "open the button menu".
+    const usableLabel = label && !GENERIC_TOGGLE_LABELS.has(label.toLowerCase())
+      ? label
+      : undefined;
+
     for (const hidden of hiddenElements) {
       hidden.container_toggle_id = toggle.id;
       hidden.container_toggle_selector = selector || undefined;
-      hidden.container_toggle_label = label || undefined;
+      // Never downgrade a label already resolved from a more specific source
+      // (a nav group's own name, for instance).
+      hidden.container_toggle_label =
+        hidden.container_toggle_label || usableLabel || hidden.container;
       // Upgrade container name from state variable to human-readable label
-      if (label && CONDITIONAL_STATE_RE.test(containerName)) {
-        hidden.container = label;
+      if (usableLabel && CONDITIONAL_STATE_RE.test(containerName)) {
+        hidden.container = usableLabel;
       }
     }
   }

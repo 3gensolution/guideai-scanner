@@ -1,12 +1,12 @@
 {
   "name": "@guideai/scanner",
-  "version": "0.1.2",
+  "version": "0.1.0",
   "bin": {
-    "guideai-scan": "./dist/cli.js" 
+    "guideai-scan": "./dist/cli.js"
   },
   "main": "./dist/index.js",
   "module": "./dist/index.mjs",
-  "types": "./dist/index.d.ts", 
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

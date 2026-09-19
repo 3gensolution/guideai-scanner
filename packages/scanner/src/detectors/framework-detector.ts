@@ -80,6 +80,13 @@ export async function detectFramework(rootDir: string): Promise<FrameworkType> {
     return 'react-router';
   }
 
+  // Generic React SPA: a React app with a custom/hand-rolled router.
+  // Without this, such projects fall through to 'plain-html', which never
+  // opens a single component file and yields an empty knowledge base.
+  if (allDeps['react'] || allDeps['react-dom']) {
+    return 'react-spa';
+  }
+
   return 'plain-html';
 }
 
