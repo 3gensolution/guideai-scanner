@@ -7,7 +7,7 @@ import { randomUUID } from 'crypto';
 import type { ScannedElement } from '../types';
 import { inferComponentName } from './component-name';
 import { buildFingerprint } from './signal-fields';
-import { collectTabDefinitions, tabOwnerForPath } from '../source-relationships';
+import { collectTabDefinitions, neutralizeDuplicateBindings, tabOwnerForPath } from '../source-relationships';
 
 // Handle both ESM default and CJS module.exports
 const traverse = (typeof _traverse === 'function' ? _traverse : (_traverse as { default: typeof _traverse }).default) as typeof _traverse;
@@ -160,6 +160,8 @@ function extractJsxElements(
       plugins,
       errorRecovery: true,
     });
+    // A recovered redeclaration parses but would throw on traverse below.
+    neutralizeDuplicateBindings(ast);
   } catch {
     return [];
   }

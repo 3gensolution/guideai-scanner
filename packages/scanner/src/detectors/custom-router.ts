@@ -4,7 +4,7 @@ import fg from 'fast-glob';
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import type { Route } from '../types';
-import { resolveSourceImport } from '../source-relationships';
+import { neutralizeDuplicateBindings, resolveSourceImport } from '../source-relationships';
 
 // Handle both ESM default and CJS module.exports
 const traverse = (typeof _traverse === 'function' ? _traverse : (_traverse as { default: typeof _traverse }).default) as typeof _traverse;
@@ -77,6 +77,7 @@ export async function extractCustomRouterRoutes(rootDir: string): Promise<Route[
         plugins: ['jsx', 'typescript'],
         errorRecovery: true,
       });
+      neutralizeDuplicateBindings(ast);
       parsedFiles.push({ filePath, ast });
       collectLocationHooks(ast, locationHooks);
     } catch {

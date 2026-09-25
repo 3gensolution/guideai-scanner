@@ -4,7 +4,7 @@ import fg from 'fast-glob';
 import { parse } from '@babel/parser';
 import _traverse from '@babel/traverse';
 import type { Route } from '../types';
-import { resolveSourceImport } from '../source-relationships';
+import { neutralizeDuplicateBindings, resolveSourceImport } from '../source-relationships';
 
 // Handle both ESM default and CJS module.exports
 const traverse = (typeof _traverse === 'function' ? _traverse : (_traverse as { default: typeof _traverse }).default) as typeof _traverse;
@@ -81,6 +81,7 @@ function parseRoutesFromFile(
     plugins,
     errorRecovery: true,
   });
+  neutralizeDuplicateBindings(ast);
 
   const routes: Route[] = [];
   const imports = new Map<string, string>();
@@ -215,15 +216,292 @@ function parseRoutesFromFile(
       }
 
       const args = nodePath.node.arguments;
-      if (args.length === 0 || args[0].type !== 'ArrayExpression') {
+      if (args.length === 0) {
         return;
       }
 
-      extractRoutesFromConfigArray(args[0], '', routes, filePath, rootDir);
+      if (args[0].type === 'ArrayExpression') {
+        extractRoutesFromConfigArray(args[0], '', routes, filePath, rootDir);
+        return;
+      }
+
+      // The array is not written inline. Splitting the route tree into its own
+      // module — `createBrowserRouter(getRoutes())`, or passing an imported
+      // `RouteObject[]` — is the ordinary data-router idiom, so resolve the
+      // argument back to the array literal it stands for. Falls back to doing
+      // nothing, exactly as before, when it cannot be traced.
+      for (const array of resolveToRouteArrays(args[0], ast, filePath, rootDir)) {
+        extractRoutesFromConfigArray(
+          array.node,
+          '',
+          routes,
+          array.filePath,
+          rootDir,
+        );
+      }
     },
   });
 
+  // Exported `RouteObject[]` arrays that no traceable createBrowserRouter call
+  // reaches from this file — a product-per-file route tree, say, selected at
+  // runtime. Scanning them directly is what makes those projects visible at
+  // all; `seen` keeps a tree already collected above from being counted twice.
+  const seen = new Set(routes.map((route) => route.path));
+  for (const array of findRouteObjectArrays(ast)) {
+    const collected: Route[] = [];
+    extractRoutesFromConfigArray(array, '', collected, filePath, rootDir);
+    for (const route of collected) {
+      if (seen.has(route.path)) continue;
+      seen.add(route.path);
+      routes.push(route);
+    }
+  }
+
   return routes;
+}
+
+/** An array literal plus the file it was found in. */
+interface ResolvedRouteArray {
+  node: { type: string; elements: Array<unknown> };
+  filePath: string;
+}
+
+/** Strip TS wrappers (`as const`, `satisfies`, `!`) to reach the real node. */
+function unwrapTs(node: any): any {
+  if (
+    node &&
+    ['TSAsExpression', 'TSSatisfiesExpression', 'TSNonNullExpression'].includes(
+      node.type,
+    )
+  ) {
+    return unwrapTs(node.expression);
+  }
+  return node;
+}
+
+/**
+ * Does this array literal look like a route tree?
+ *
+ * Deliberately strict: every element must be an object, and at least one must
+ * carry a route-shaped key. A loose test here would sweep up unrelated config
+ * arrays and invent routes that do not exist.
+ */
+function looksLikeRouteArray(node: any): boolean {
+  if (!node || node.type !== 'ArrayExpression') return false;
+  const elements = (node.elements || []).filter(Boolean);
+  if (elements.length === 0) return false;
+
+  let routeShaped = 0;
+  for (const element of elements as any[]) {
+    if (element.type !== 'ObjectExpression') return false;
+    const keys = (element.properties || [])
+      .filter((prop: any) => prop.type === 'ObjectProperty')
+      .map((prop: any) =>
+        prop.key.type === 'Identifier'
+          ? prop.key.name
+          : prop.key.type === 'StringLiteral'
+            ? prop.key.value
+            : '',
+      );
+    const hasLocation = keys.includes('path') || keys.includes('index');
+    const hasRender =
+      keys.includes('element') ||
+      keys.includes('children') ||
+      keys.includes('Component') ||
+      keys.includes('lazy');
+    if (hasLocation && hasRender) routeShaped += 1;
+  }
+  return routeShaped > 0;
+}
+
+/** Every `RouteObject[]`-shaped array literal declared in one AST. */
+function findRouteObjectArrays(ast: any): Array<{ type: string; elements: Array<unknown> }> {
+  const found: Array<{ type: string; elements: Array<unknown> }> = [];
+  traverse(ast, {
+    VariableDeclarator(p) {
+      const init = unwrapTs(p.node.init);
+      if (looksLikeRouteArray(init)) found.push(init);
+    },
+  });
+  return found;
+}
+
+/**
+ * Trace a non-literal `createBrowserRouter` argument back to route arrays.
+ *
+ * Handles the two shapes that actually appear: a bare identifier holding the
+ * array, and a zero-argument factory returning one (often via a `switch`, so
+ * every `return` is followed, not just the first). Both are resolved across
+ * files, because the route tree usually lives in its own module.
+ */
+function resolveToRouteArrays(
+  argument: any,
+  ast: any,
+  filePath: string,
+  rootDir: string,
+  depth = 0,
+): ResolvedRouteArray[] {
+  if (depth > 3) return [];
+
+  const node = unwrapTs(argument);
+  if (!node) return [];
+
+  if (node.type === 'ArrayExpression') {
+    return looksLikeRouteArray(node) ? [{ node, filePath }] : [];
+  }
+
+  // `createBrowserRouter(routes)`
+  if (node.type === 'Identifier') {
+    return resolveBindingToArrays(node.name, ast, filePath, rootDir, depth);
+  }
+
+  // `createBrowserRouter(getRoutes())`
+  if (node.type === 'CallExpression' && node.callee.type === 'Identifier') {
+    return resolveBindingToArrays(
+      node.callee.name,
+      ast,
+      filePath,
+      rootDir,
+      depth,
+      true,
+    );
+  }
+
+  return [];
+}
+
+/**
+ * Resolve one binding name — local first, then through its import — to the
+ * route arrays it stands for.
+ */
+function resolveBindingToArrays(
+  name: string,
+  ast: any,
+  filePath: string,
+  rootDir: string,
+  depth: number,
+  callReturns = false,
+): ResolvedRouteArray[] {
+  const results: ResolvedRouteArray[] = [];
+
+  traverse(ast, {
+    VariableDeclarator(p) {
+      if (p.node.id.type !== 'Identifier' || p.node.id.name !== name) return;
+      const init = unwrapTs(p.node.init);
+      if (!init) return;
+      if (callReturns) {
+        // `const getRoutes = () => …` / `= function () { … }`
+        if (
+          init.type === 'ArrowFunctionExpression' ||
+          init.type === 'FunctionExpression'
+        ) {
+          results.push(
+            ...arraysFromFunctionBody(init, ast, filePath, rootDir, depth),
+          );
+        }
+        return;
+      }
+      results.push(...resolveToRouteArrays(init, ast, filePath, rootDir, depth + 1));
+    },
+    FunctionDeclaration(p) {
+      if (!callReturns || p.node.id?.name !== name) return;
+      results.push(...arraysFromFunctionBody(p.node, ast, filePath, rootDir, depth));
+    },
+  });
+
+  if (results.length > 0) return results;
+
+  // Not defined here — follow the import to the file that owns it.
+  let importedFrom: string | undefined;
+  let importedName = name;
+  traverse(ast, {
+    ImportDeclaration(p) {
+      for (const spec of p.node.specifiers) {
+        if (spec.local.name !== name) continue;
+        importedFrom = p.node.source.value;
+        if (spec.type === 'ImportSpecifier' && spec.imported.type === 'Identifier') {
+          importedName = spec.imported.name;
+        }
+      }
+    },
+  });
+
+  if (!importedFrom) return results;
+
+  const resolved = resolveSourceImport(filePath, importedFrom, rootDir);
+  if (!resolved) return results;
+
+  const imported = parseFileToAst(resolved);
+  if (!imported) return results;
+
+  return resolveBindingToArrays(
+    importedName,
+    imported,
+    resolved,
+    rootDir,
+    depth + 1,
+    callReturns,
+  );
+}
+
+/** Route arrays returned from a function body, following every `return`. */
+function arraysFromFunctionBody(
+  fn: any,
+  ast: any,
+  filePath: string,
+  rootDir: string,
+  depth: number,
+): ResolvedRouteArray[] {
+  const results: ResolvedRouteArray[] = [];
+
+  // Concise arrow body: `() => guideosRoutes`
+  if (fn.body && fn.body.type !== 'BlockStatement') {
+    return resolveToRouteArrays(fn.body, ast, filePath, rootDir, depth + 1);
+  }
+
+  const visit = (node: any): void => {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'ReturnStatement' && node.argument) {
+      results.push(
+        ...resolveToRouteArrays(node.argument, ast, filePath, rootDir, depth + 1),
+      );
+      return;
+    }
+    // Don't descend into nested functions — their returns are not this one's.
+    if (
+      node !== fn &&
+      ['FunctionDeclaration', 'FunctionExpression', 'ArrowFunctionExpression'].includes(
+        node.type,
+      )
+    ) {
+      return;
+    }
+    for (const key of Object.keys(node)) {
+      const child = (node as any)[key];
+      if (Array.isArray(child)) child.forEach(visit);
+      else if (child && typeof child.type === 'string') visit(child);
+    }
+  };
+  visit(fn.body);
+
+  return results;
+}
+
+/** Parse a file for cross-file resolution. Returns null if unreadable. */
+function parseFileToAst(filePath: string): any | null {
+  try {
+    const source = fs.readFileSync(filePath, 'utf-8');
+    const isTypeScript = filePath.endsWith('.ts') || filePath.endsWith('.tsx');
+    const isJSX = filePath.endsWith('.jsx') || filePath.endsWith('.tsx');
+    const plugins: Array<'jsx' | 'typescript'> = [];
+    if (isJSX) plugins.push('jsx');
+    if (isTypeScript) plugins.push('typescript');
+    const parsed = parse(source, { sourceType: 'module', plugins, errorRecovery: true });
+    neutralizeDuplicateBindings(parsed);
+    return parsed;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -254,6 +532,10 @@ function extractRoutesFromConfigArray(
     let routePath = '';
     let hasChildren = false;
     let childrenNode: { type: string; elements: Array<unknown> } | null = null;
+    // `{ index: true }` is the section's own landing page. It carries no path
+    // of its own — it resolves to the parent's — so without this the landing
+    // page of every section is silently dropped while its siblings survive.
+    let isIndex = false;
 
     for (const prop of obj.properties) {
       if (prop.type !== 'ObjectProperty') continue;
@@ -267,6 +549,14 @@ function extractRoutesFromConfigArray(
 
       if (keyName === 'path' && prop.value.type === 'StringLiteral') {
         routePath = prop.value.value || '';
+      }
+
+      if (
+        keyName === 'index' &&
+        (prop.value as { type: string; value?: unknown }).type === 'BooleanLiteral' &&
+        (prop.value as { type: string; value?: unknown }).value === true
+      ) {
+        isIndex = true;
       }
 
       if (keyName === 'children' && prop.value.type === 'ArrayExpression') {
@@ -298,6 +588,19 @@ function extractRoutesFromConfigArray(
           filePath,
           rootDir,
         );
+      }
+    } else if (isIndex) {
+      // Index route: the parent's own path. At the top level the parent is
+      // the router root, so it is "/".
+      const fullPath = normalizePath(parentPath || '/');
+      if (!routes.some((route) => route.path === fullPath)) {
+        routes.push({
+          path: fullPath,
+          source_file: path.relative(rootDir, filePath),
+          dynamic_segments: extractDynamicSegments(fullPath),
+          auth_required: false,
+          headings: [],
+        });
       }
     } else if (hasChildren && childrenNode) {
       // Layout route without path

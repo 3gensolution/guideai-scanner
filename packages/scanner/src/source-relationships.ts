@@ -5,6 +5,61 @@ import _traverse from '@babel/traverse';
 
 const traverse = (typeof _traverse === 'function' ? _traverse : (_traverse as { default: typeof _traverse }).default) as typeof _traverse;
 
+/**
+ * Make an error-recovered AST safe to traverse.
+ *
+ * `errorRecovery: true` lets the parser accept a file that redeclares a
+ * binding — `const anyThing = …` twice in one scope — and record it as a
+ * recovered error instead of throwing. Babel's *traversal* is stricter: the
+ * moment it builds scope it re-checks collisions and throws
+ * `Duplicate declaration "x"`, outside whatever try/catch guards the parse.
+ *
+ * That turns one sloppy file in a customer's repo into a dead scan: the
+ * process exits and every route already extracted is discarded. Real
+ * codebases ship these — the bundler tolerates them, so nobody notices — and
+ * a scanner that refuses to read a project until its source is clean is not
+ * one anybody can run.
+ *
+ * So the offending declarators are renamed before traversal. Only the exact
+ * positions Babel flagged are touched, which leaves the legal case — the same
+ * name declared in two different scopes — alone. The names are internal to
+ * this parse and never reach output; elements are keyed off JSX, not
+ * identifiers.
+ */
+export function neutralizeDuplicateBindings(ast: any): void {
+  const positions = new Set<number>();
+  for (const error of ast?.errors ?? []) {
+    if (error?.reasonCode !== 'VarRedeclaration') continue;
+    const pos = error.pos ?? error.loc?.index;
+    if (typeof pos === 'number') positions.add(pos);
+  }
+  if (positions.size === 0) return;
+
+  let counter = 0;
+  const rename = (node: any): void => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) {
+      node.forEach(rename);
+      return;
+    }
+    const id = node.type === 'VariableDeclarator' ? node.id : undefined;
+    if (
+      id &&
+      id.type === 'Identifier' &&
+      typeof id.start === 'number' &&
+      positions.has(id.start)
+    ) {
+      id.name = `${id.name}$dup${++counter}`;
+    }
+    for (const key of Object.keys(node)) {
+      if (key === 'loc' || key === 'leadingComments' || key === 'trailingComments') continue;
+      const child = node[key];
+      if (child && typeof child === 'object') rename(child);
+    }
+  };
+  rename(ast.program ?? ast);
+}
+
 export function resolveSourceImport(from: string, specifier: string, rootDir?: string): string | undefined {
   const base = specifier.startsWith('.') ? path.resolve(path.dirname(from), specifier)
     : rootDir && specifier.startsWith('@/') ? path.resolve(rootDir, 'src', specifier.slice(2)) : undefined;
@@ -78,7 +133,10 @@ export function collectTabDefinitions(ast: any, route: string, component: string
 
 export function renderedSourceImports(file: string, route: string, rootDir: string): Array<{ file: string; owner?: TabOwner }> {
   let ast;
-  try { ast = parse(fs.readFileSync(file, 'utf8'), { sourceType: 'module', plugins: ['jsx', 'typescript'], errorRecovery: true }); }
+  try {
+    ast = parse(fs.readFileSync(file, 'utf8'), { sourceType: 'module', plugins: ['jsx', 'typescript'], errorRecovery: true });
+    neutralizeDuplicateBindings(ast);
+  }
   catch { return []; }
   const imports = new Map<string, string>();
   traverse(ast, { ImportDeclaration(p) {

@@ -21,6 +21,31 @@ import { renderedSourceImports, type TabOwner } from './source-relationships';
 import { bestMatchingRoutePath } from './route-match';
 
 /**
+ * Extract one file's elements, never letting that file take the scan down.
+ *
+ * Parsing somebody else's repository is an inherently partial job: a file can
+ * use a syntax this parser has not learned, or trip a Babel invariant that
+ * `errorRecovery` does not cover. Losing one file's buttons is a small,
+ * local loss. Losing the whole scan — after every route has already been
+ * found — is the difference between a product that works on a customer's
+ * codebase and one that does not, so the failure is contained here and
+ * reported rather than thrown.
+ */
+async function extractElementsSafely(
+  filePath: string,
+  routePath: string,
+  scopeComponent?: string,
+): Promise<ScannedElement[]> {
+  try {
+    return await extractElements(filePath, routePath, scopeComponent);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.warn(`[GuideAI] Skipped ${filePath}: ${reason}`);
+    return [];
+  }
+}
+
+/**
  * Run the full GuideAI scanning pipeline:
  *
  * 1. Detect framework
@@ -166,7 +191,7 @@ async function extractAllElements(
     if (visitedContexts.has(key) || ancestry.has(file)) return;
     visitedContexts.add(key);
     processedFiles.add(file);
-    const elements = await extractElements(file, route, scopeComponent);
+    const elements = await extractElementsSafely(file, route, scopeComponent);
     allElements.push(...elements.map(element => owner && !element.tab ? { ...element, ...owner } : element));
     const nextAncestry = new Set(ancestry).add(file);
     for (const imported of renderedSourceImports(file, route, rootDir)) {
@@ -200,7 +225,7 @@ async function extractAllElements(
       await visit(absolutePath, route.path, undefined, new Set<string>(), scope);
     } else if (!processedFiles.has(absolutePath)) {
       processedFiles.add(absolutePath);
-      allElements.push(...await extractElements(absolutePath, route.path));
+      allElements.push(...await extractElementsSafely(absolutePath, route.path));
     }
   }
 
@@ -214,7 +239,7 @@ async function extractAllElements(
 
       // Associate components with the closest route or use '/' as fallback
       const routePath = inferRouteForComponent(filePath, routes, rootDir, framework);
-      const elements = await extractElements(filePath, routePath);
+      const elements = await extractElementsSafely(filePath, routePath);
       allElements.push(...elements);
     }
   }
